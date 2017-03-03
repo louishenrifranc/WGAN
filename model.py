@@ -8,6 +8,11 @@ from tqdm import tqdm
 import numpy as np
 import utils
 
+"""
+@To run on CPU:        export CUDA_VISIBLE_DEVICES="",
+@To run without cudnn: export TF_USE_CUDNN=0 (actually conv2D is not supported without cudnn)
+"""
+
 tf.flags.DEFINE_integer("batch_size", 32, "Size of a batch")
 tf.flags.DEFINE_integer("hidden_dim", 100, "Latent space dimension")
 tf.flags.DEFINE_integer("input_size", 28, "Dimension of input")
@@ -141,7 +146,7 @@ class GAN:
         print("Batch norm variables {}".format([v.op.name for v in update_ops]))
         with tf.control_dependencies(update_ops):
             grads_dis = self.optimizer.compute_gradients(loss=self.dis_loss, var_list=self.dis_variables)
-            self.train_dis = self.optimizer.apply_gradients(grads_dis, global_step=self.global_step)
+            self.train_dis = self.optimizer.apply_gradients(grads_dis)
 
             grads_gen = self.optimizer.compute_gradients(loss=self.gen_loss, var_list=self.gen_variables)
             self.train_gen = self.optimizer.apply_gradients(grads_gen, global_step=self.global_step)
@@ -267,7 +272,7 @@ def main(argv):
     gan = GAN()
     gan.build()
     if args.train is not None:
-        print("Train the model")
+        cprint("[!] Train the model", color="green")
         gan.train()
     elif args.draw is not None:
         print("Draw a {}".format(args.draw))
