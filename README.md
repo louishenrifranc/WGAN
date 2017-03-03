@@ -13,7 +13,7 @@ To train the model, run the command:
 ```
 python model.py --train
 ```
-Model retrieve the last checkpoint, and saved it every 100 iterations.
+Model retrieve automaticcaly the last checkpoint and restart at the global step, and saved itself every 100 iterations.  
 It also saved summary for images generated and other variables, to further
 display in Tensorboard ```tensorboard --logdir="logs"```
 

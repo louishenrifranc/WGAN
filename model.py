@@ -1,6 +1,8 @@
 from tensorflow.examples.tutorials.mnist import input_data
 from tensorflow.contrib.layers import batch_norm, conv2d, conv2d_transpose, fully_connected
 from argparse import ArgumentParser
+from termcolor import cprint
+from tqdm import trange
 import tensorflow as tf
 from tqdm import tqdm
 import numpy as np
@@ -11,7 +13,6 @@ tf.flags.DEFINE_integer("hidden_dim", 100, "Latent space dimension")
 tf.flags.DEFINE_integer("input_size", 28, "Dimension of input")
 tf.flags.DEFINE_integer("nb_iter", 10000, "Number of iterations")
 tf.flags.DEFINE_integer("critic_iter", 50, "Number of critic iterations")
-tf.flags.DEFINE_string("model_folder", "model", "Where the model is saved")
 
 tf.flags.DEFINE_integer("nb_classes", 10, "Number of different target classes")
 FLAGS = tf.flags.FLAGS
@@ -31,6 +32,8 @@ class GAN:
         self.nb_critic_iter = flags.critic_iter
 
         self.sess = tf.Session()
+
+        self.global_step = tf.Variable(0, trainable=False, name='global_step')
 
     def _create_placeholder(self, scope_name="placeholder"):
         with tf.variable_scope(scope_name):
@@ -54,29 +57,6 @@ class GAN:
 
     def _generator(self, scope_name="generator"):
         with tf.variable_scope(scope_name) as _:
-            # 32 x 1 x 1 x 10
-            y_reshape = tf.reshape(self.y, [-1, 1, 1, self.nb_targets])
-            # 32 x 38
-            h1 = tf.concat([self.z, self.y], 1)
-            W1 = utils.weight_variable((h1.get_shape().as_list()[1], 7 * 7 * 1024), name="W1")
-            # 32 x (7 x 7 x 1024)
-            h1 = batch_norm(tf.matmul(h1, W1), is_training=self.is_training, scale=True)
-            # 32 x 7 x 7 x 1024
-            h2 = tf.reshape(h1, [-1, 7, 7, 1024])
-            # 32 x 7 x 7 x 1034
-            h2 = tf.concat([h2, y_reshape * tf.ones([-1, 7, 7, self.nb_targets])], 3)
-            # 32 x 7 x 7 x 512
-            h3 = batch_norm(conv2d_transpose(h2, 512, 5, 2), is_training=self.is_training, scale=True)
-            # 32 x 14 x 14 x 256
-            h4 = batch_norm(conv2d_transpose(h3, 256, 5, 2), is_training=self.is_training, scale=True)
-            # 32 x 28 x 28 x 128
-            h5 = batch_norm(conv2d_transpose(h4, 128, 5, 1), is_training=self.is_training, scale=True)
-            # 32 x 28 x 28 x 1
-            h6 = conv2d_transpose(h5, 1, 5, 1, activation_fn=tf.nn.tanh)
-            return h6
-
-    def _generator2(self, scope_name="generator"):
-        with tf.variable_scope(scope_name) as _:
             x = fully_connected(
                 self.z, 7 * 7 * 512, activation_fn=utils.lrelu, normalizer_fn=batch_norm)
             x = tf.reshape(x, (-1, 7, 7, 512))
@@ -86,17 +66,18 @@ class GAN:
 
             # 32 x 14 x 14 x 256
             x = conv2d_transpose(x, 256, 3, stride=2,
-                                 activation_fn=tf.nn.relu, normalizer_fn=batch_norm, padding='SAME',
+                                 activation_fn=utils.lrelu, normalizer_fn=batch_norm, padding='SAME',
                                  weights_initializer=tf.random_normal_initializer(0, 0.02))
             x = tf.concat([x, y_reshape * tf.ones([tf.shape(self.y)[0], 14, 14, self.nb_targets])], 3)
 
             # 32 x 28 x 28 x 128
             x = conv2d_transpose(x, 128, 3, stride=2,
-                                 activation_fn=tf.nn.relu, normalizer_fn=batch_norm, padding='SAME',
+                                 activation_fn=utils.lrelu, normalizer_fn=batch_norm, padding='SAME',
                                  weights_initializer=tf.random_normal_initializer(0, 0.02))
             # 32 x 28 x 28 x 64
+            x = tf.concat([x, y_reshape * tf.ones([tf.shape(self.y)[0], 28, 28, self.nb_targets])], 3)
             x = conv2d_transpose(x, 64, 3, stride=1,
-                                 activation_fn=tf.nn.relu, normalizer_fn=batch_norm, padding='SAME',
+                                 activation_fn=utils.lrelu, normalizer_fn=batch_norm, padding='SAME',
                                  weights_initializer=tf.random_normal_initializer(0, 0.02))
             # 32 x 28 x 28 x 1
             x = conv2d_transpose(x, 1, 3, stride=1,
@@ -123,11 +104,13 @@ class GAN:
 
     def build(self):
         self._create_placeholder()
-        self.gen_images = self._generator2()
-        self.x_reshape = tf.reshape(self.x, [-1, 28, 28, 1])
+        self.gen_images = self._generator()
 
+        self.x_reshape = tf.reshape(self.x, [-1, 28, 28, 1])
         self.features_real = self._discriminator(self.x_reshape, reuse_scope=False)
+
         self.features_fake = self._discriminator(self.gen_images, reuse_scope=True)
+
         self.optimize(self.features_real, self.features_fake)
         self.summary()
 
@@ -154,53 +137,105 @@ class GAN:
         self.dis_variables = [v for v in train_variables if v.name.startswith("discriminator")]
         print("Discriminator variable {}".format([v.op.name for v in self.dis_variables]))
 
-        # batch norm operations (because batch_norm operations are not parent of train_dis, so we need
-        # to tell tensorflow to still do the computation
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         print("Batch norm variables {}".format([v.op.name for v in update_ops]))
         with tf.control_dependencies(update_ops):
             grads_dis = self.optimizer.compute_gradients(loss=self.dis_loss, var_list=self.dis_variables)
-            self.train_dis = self.optimizer.apply_gradients(grads_dis)
+            self.train_dis = self.optimizer.apply_gradients(grads_dis, global_step=self.global_step)
 
             grads_gen = self.optimizer.compute_gradients(loss=self.gen_loss, var_list=self.gen_variables)
-            self.train_gen = self.optimizer.apply_gradients(grads_gen)
+            self.train_gen = self.optimizer.apply_gradients(grads_gen, global_step=self.global_step)
 
-    def _restore(self):
-        self.sess.run(tf.global_variables_initializer())
+    def _restore(self, save_name="model/"):
+        """
+        Retrieve last model saved if possible
+        Create a main Saver object
+        Create a SummaryWriter object
+        Init variables
+        :param save_name: string (default : model)
+            Name of the model
+        :return:
+        """
         saver = tf.train.Saver(max_to_keep=5)
-        last_saved_model = tf.train.latest_checkpoint('model')
+        # Try to restore an old model
+        last_saved_model = tf.train.latest_checkpoint(save_name)
+
+        group_init_ops = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
+        self.sess.run(group_init_ops)
+        summary_writer = tf.summary.FileWriter('logs/',
+                                               graph=self.sess.graph,
+                                               flush_secs=20)
         if last_saved_model is not None:
             saver.restore(self.sess, last_saved_model)
-            print("Restoring model  {}".format(last_saved_model))
-        return saver
+            cprint("[*] Restoring model  {}".format(last_saved_model), color="green")
+        else:
+            tf.train.global_step(self.sess, self.global_step)
+            cprint("[*] New model created", color="green")
+        return saver, summary_writer
+
+    def _save(self, saver, summary_writer, is_iter=True, extras=None):
+        current_iter = self.sess.run(self.global_step)
+        if not is_iter:
+            # Save graph
+            saver.save(self.sess, global_step=current_iter, save_path="model/{}".format("model"))
+            summary_writer.add_summary(extras, current_iter)
+
+        # Iter saving (write variable + loss)
+        else:
+            saver.save(self.sess, global_step=current_iter, save_path="model/{}".format("model"))
+            summary_gen_loss = tf.Summary(value=[
+                tf.Summary.Value(tag="gen_loss", simple_value=extras[0]),
+            ])
+            summary_dis_loss = tf.Summary(value=[
+                tf.Summary.Value(tag="gen_loss", simple_value=extras[1]),
+            ])
+            summary_writer.add_summary(summary_dis_loss, global_step=current_iter)
+            summary_writer.add_summary(summary_gen_loss, global_step=current_iter)
 
     def train(self):
-        summary_writer = tf.summary.FileWriter('logs', graph=self.sess.graph, flush_secs=60)
         clip_discriminator_var_op = utils.clip_op(self.dis_variables)
-        saver = self._restore()
-        for itr in tqdm(range(self.nb_iter)):
-            if itr <= 25 or itr % 100 == 0:
+        saver, summary_writer = self._restore()
+
+        start_itr = self.sess.run(self.global_step)
+        cprint("[!] Restarting at iteration {}".format(start_itr), color="yellow")
+
+        for itr in tqdm(range(start_itr, self.nb_iter), desc="Train the model"):
+            # Pretrain discriminator at the beginning
+            if itr <= 25 or itr % 50 == 0:
                 nb_critic_iteration = 100
             else:
                 nb_critic_iteration = self.nb_critic_iter
 
-            for _ in range(nb_critic_iteration):
+            # Train the discriminator
+            for _ in trange(nb_critic_iteration, desc="Training discriminator", leave=False):
                 self.sess.run([self.train_dis], feed_dict=self._feed_dict(True))
                 self.sess.run(clip_discriminator_var_op)
 
+            # Train the generator
             self.sess.run(self.train_gen, feed_dict=self._feed_dict(True))
-            if itr % 100 == 0:
-                saver.save(self.sess, global_step=itr, save_path="model/model")
-                print("Saving model")
-                summary_str = self.sess.run(self.merged_summary_op, feed_dict=self._feed_dict(False))
-                summary_writer.add_summary(summary_str, itr)
 
+            # Save the summary
+            if itr % 100 == 0:
+                summary_str = self.sess.run(self.merged_summary_op, feed_dict=self._feed_dict(False))
+                self._save(saver, summary_writer, is_iter=False, extras=summary_str)
+
+            # Compute test losses for G and D and add them to TensorBoard
+            # Save the model
             if itr % 200 == 0:
-                g_loss_val, d_loss_val = self.sess.run([self.gen_loss, self.dis_loss],
-                                                       feed_dict=self._feed_dict(False))
+                g_loss_val, d_loss_val = 0, 0
+                n_test_iter = len(mnist.test.images) // self.batch_size
+                for _ in trange(n_test_iter, desc="Compute loss test", leave=False):
+                    g_loss, d_loss = self.sess.run([self.gen_loss, self.dis_loss],
+                                                   feed_dict=self._feed_dict(False))
+                    g_loss_val += g_loss
+                    d_loss_val += d_loss
+                g_loss_val /= n_test_iter
+                d_loss_val /= n_test_iter
+                self._save(saver, summary_writer, is_iter=True, extras=[g_loss_val, d_loss_val])
                 print(
                     "Iter {}: \n\tgenerator loss: {}, \n\tdiscriminator loss: {}".format(itr, g_loss_val,
                                                                                          d_loss_val))
+            itr += 1
 
     def visualize(self, numbers):
         nb_figures = len(numbers)
@@ -226,8 +261,8 @@ class GAN:
 
 def main(argv):
     parser = ArgumentParser(description="WGAN_script")
-    parser.add_argument("--train")
-    parser.add_argument("--draw")
+    parser.add_argument("--train", action="store_true", default=True, help="Train WGAN on MNIST dataset")
+    parser.add_argument("--draw", action="store_true", default=False, help="Draw a sample of images")
     args, _ = parser.parse_known_args()
     gan = GAN()
     gan.build()
