@@ -266,16 +266,16 @@ class GAN:
 
 def main(argv):
     parser = ArgumentParser(description="WGAN_script")
-    parser.add_argument("--train", action="store_true", default=True, help="Train WGAN on MNIST dataset")
-    parser.add_argument("--draw", action="store_true", default=False, help="Draw a sample of images")
+    parser.add_argument("--train", action="store_true", default=False, help="Train WGAN on MNIST dataset")
+    parser.add_argument("--draw", default=None, type=str, help="Draw a sample of images")
     args, _ = parser.parse_known_args()
     gan = GAN()
     gan.build()
-    if args.train is not None:
+    if args.train:
         cprint("[!] Train the model", color="green")
         gan.train()
-    elif args.draw is not None:
-        print("Draw a {}".format(args.draw))
+    elif args.draw:
+        cprint("[!] Draw {}".format(args.draw), color="green")
         gan.visualize([int(item) for item in args.draw.split(',')])
 
 
