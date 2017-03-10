@@ -17,7 +17,7 @@ tf.flags.DEFINE_integer("batch_size", 32, "Size of a batch")
 tf.flags.DEFINE_integer("hidden_dim", 100, "Latent space dimension")
 tf.flags.DEFINE_integer("input_size", 28, "Dimension of input")
 tf.flags.DEFINE_integer("nb_iter", 10000, "Number of iterations")
-tf.flags.DEFINE_integer("critic_iter", 50, "Number of critic iterations")
+tf.flags.DEFINE_integer("critic_iter", 80, "Number of critic iterations")
 
 tf.flags.DEFINE_integer("nb_classes", 10, "Number of different target classes")
 FLAGS = tf.flags.FLAGS
